@@ -18,7 +18,11 @@ THRESHOLD_FIELDS = [
     ("grp_uplift_pct", "ГРП: прирост Qн, %"),
     ("rir_watercut_min", "РИР: минимальная обводнённость, %"),
     ("rir_depletion_max", "РИР: максимальная выработка запасов, %"),
-    ("rir_uplift_pct", "РИР: прирост Qн, %"),
+    ("rir_min_history_points", "РИР: минимум точек истории для диагностики Chan"),
+    ("rir_spike_ratio", "РИР: порог скачка производной ВНФ (во сколько раз)"),
+    ("rir_squeeze_uplift_pct", "РИР (сквозная заливка): прирост Qн, %"),
+    ("rir_selective_uplift_pct", "РИР (селективная изоляция): прирост Qн, %"),
+    ("rir_interval_switch_uplift_pct", "РИР (перевод на другие интервалы): прирост Qн, %"),
     ("zbs_watercut_min", "ЗБС: минимальная обводнённость, %"),
     ("zbs_reserves_min", "ЗБС: минимальные остаточные запасы, тыс.т"),
     ("zbs_uplift_pct", "ЗБС: прирост Qн, %"),
@@ -131,6 +135,7 @@ class SettingsTab(ttk.Frame):
             t_kwargs = {attr: float(self._vars[attr].get()) for attr, _ in THRESHOLD_FIELDS}
             t_kwargs["reactivation_max_idle_days"] = int(float(t_kwargs["reactivation_max_idle_days"]))
             t_kwargs["min_months_between_gtm"] = int(float(t_kwargs["min_months_between_gtm"]))
+            t_kwargs["rir_min_history_points"] = int(float(t_kwargs["rir_min_history_points"]))
 
             e_kwargs = {attr: float(self._vars[attr].get()) for attr, _ in ECON_FIELDS}
             e_kwargs["effect_duration_months"] = int(float(e_kwargs["effect_duration_months"]))
