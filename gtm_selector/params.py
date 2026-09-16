@@ -20,10 +20,14 @@ class Thresholds:
     grp_depletion_max: float = 65.0    # %
     grp_uplift_pct: float = 80.0
 
-    # РИР — водоизоляционные работы
-    rir_watercut_min: float = 80.0
+    # РИР — ремонтно-изоляционные работы (диагностика механизма по методу Chan)
+    rir_watercut_min: float = 60.0
     rir_depletion_max: float = 90.0
-    rir_uplift_pct: float = 15.0
+    rir_min_history_points: int = 6
+    rir_spike_ratio: float = 8.0
+    rir_squeeze_uplift_pct: float = 12.0
+    rir_selective_uplift_pct: float = 18.0
+    rir_interval_switch_uplift_pct: float = 25.0
 
     # ЗБС — зарезка бокового ствола
     zbs_watercut_min: float = 95.0
@@ -70,7 +74,9 @@ class EconomicParams:
     cost_by_type: dict = field(default_factory=lambda: {
         "opz": 1_500_000.0,
         "grp": 12_000_000.0,
-        "rir": 3_000_000.0,
+        "rir_squeeze": 2_000_000.0,
+        "rir_selective": 3_500_000.0,
+        "rir_interval_switch": 6_000_000.0,
         "zbs": 45_000_000.0,
         "pump_up": 800_000.0,
         "pump_down": 600_000.0,

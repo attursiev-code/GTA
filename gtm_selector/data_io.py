@@ -6,7 +6,7 @@ import csv
 import json
 from pathlib import Path
 
-from .models import Well, Recommendation
+from .models import ProductionPoint, Well, Recommendation
 from .params import Settings
 
 WELL_FIELDS = [
@@ -48,6 +48,24 @@ def load_wells_csv(path: str | Path) -> list[Well]:
                     data[key] = value
             wells.append(Well.from_dict(data))
     return wells
+
+
+def load_history_csv(path: str | Path) -> dict[str, list[ProductionPoint]]:
+    """Читает историю добычи (well_id, date, qo, qw) и группирует по скважинам."""
+    history: dict[str, list[ProductionPoint]] = {}
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            well_id = (row.get("well_id") or "").strip()
+            if not well_id:
+                continue
+            date = (row.get("date") or "").strip()
+            qo_raw = (row.get("qo") or "").strip()
+            qw_raw = (row.get("qw") or "").strip()
+            qo = float(qo_raw) if qo_raw != "" else 0.0
+            qw = float(qw_raw) if qw_raw != "" else 0.0
+            history.setdefault(well_id, []).append(ProductionPoint(date=date, qo=qo, qw=qw))
+    return history
 
 
 def save_wells_csv(wells: list[Well], path: str | Path) -> None:

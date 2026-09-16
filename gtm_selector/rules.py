@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from .diagnostics import WaterMechanism, classify_water_mechanism
 from .models import Well, WellStatus, GtmType, Candidate
 from .params import Thresholds
 
@@ -47,19 +48,51 @@ def check_grp(well: Well, t: Thresholds) -> Candidate:
     return Candidate(GtmType.GRP, matched, reasons, delta)
 
 
+_RIR_MECHANISM_MAP = {
+    # изолированный прорыв воды у забоя -> сквозная заливка (тампонирование)
+    WaterMechanism.NEAR_WELLBORE: (GtmType.RIR_SQUEEZE, "rir_squeeze_uplift_pct"),
+    # заколонный переток по промытому каналу -> селективная изоляция пропластка
+    WaterMechanism.CHANNELING: (GtmType.RIR_SELECTIVE, "rir_selective_uplift_pct"),
+    # неравномерная выработка нескольких пропластков -> перевод на другие интервалы
+    WaterMechanism.MULTILAYER: (GtmType.RIR_INTERVAL_SWITCH, "rir_interval_switch_uplift_pct"),
+}
+
+
 def check_rir(well: Well, t: Thresholds) -> Candidate:
-    reasons = []
-    matched = (
-        well.status == WellStatus.ACTIVE
-        and well.watercut >= t.rir_watercut_min
-        and well.depletion <= t.rir_depletion_max
+    """Проверяет пороги обводнённости/выработки, затем диагностирует механизм
+    обводнения по методу Chan и подбирает подходящий подтип РИР.
+
+    Если диагностированный механизм — CONING, STABLE или INSUFFICIENT_DATA,
+    кандидат РИР не формируется (конус лечится сменой режима, а не изоляцией;
+    стабильная обводнённость и недостаток данных не дают оснований для РИР).
+    """
+    no_match = Candidate(GtmType.RIR_SQUEEZE, False, [], 0.0)
+
+    if well.status != WellStatus.ACTIVE:
+        return no_match
+    if well.watercut < t.rir_watercut_min:
+        return no_match
+    if well.depletion > t.rir_depletion_max:
+        return no_match
+
+    diag = classify_water_mechanism(
+        well.history,
+        min_points=t.rir_min_history_points,
+        spike_ratio=t.rir_spike_ratio,
     )
-    delta = 0.0
-    if matched:
-        reasons.append(f"Обводнённость {well.watercut:.1f}% ≥ {t.rir_watercut_min:.1f}% — прорыв воды")
-        reasons.append(f"Выработка запасов {well.depletion:.1f}% ≤ {t.rir_depletion_max:.1f}% — есть смысл изолировать")
-        delta = well.qo * (t.rir_uplift_pct / 100.0)
-    return Candidate(GtmType.RIR, matched, reasons, delta)
+
+    mapping = _RIR_MECHANISM_MAP.get(diag.mechanism)
+    if mapping is None:
+        return no_match
+
+    gtm_type, uplift_attr = mapping
+    reasons = [
+        f"Обводнённость {well.watercut:.1f}% ≥ {t.rir_watercut_min:.1f}% — прорыв воды",
+        f"Выработка запасов {well.depletion:.1f}% ≤ {t.rir_depletion_max:.1f}% — есть смысл изолировать",
+        *diag.reasons,
+    ]
+    delta = well.qo * (getattr(t, uplift_attr) / 100.0)
+    return Candidate(gtm_type, True, reasons, delta)
 
 
 def check_zbs(well: Well, t: Thresholds) -> Candidate:
@@ -141,14 +174,9 @@ def check_reactivation(well: Well, t: Thresholds) -> Candidate:
     return Candidate(GtmType.REACTIVATION, matched, reasons, delta)
 
 
-ALL_CHECKS = [
-    check_opz,
-    check_grp,
-    check_rir,
-    check_zbs,
-    check_perforation,
-    check_reactivation,
-]
+# Временно сфокусировано только на РИР — остальные проверки пока не
+# используются в evaluate_well, но их код сохранён для последующего возврата.
+ALL_CHECKS = []
 
 
 def evaluate_well(well: Well, thresholds: Thresholds) -> list[Candidate]:
@@ -163,8 +191,8 @@ def evaluate_well(well: Well, thresholds: Thresholds) -> list[Candidate]:
         if c is not None and c.matched:
             candidates.append(c)
 
-    pump_candidate = check_pump(well, thresholds)
-    if pump_candidate is not None and pump_candidate.matched:
-        candidates.append(pump_candidate)
+    rir_candidate = check_rir(well, thresholds)
+    if rir_candidate is not None and rir_candidate.matched:
+        candidates.append(rir_candidate)
 
     return candidates

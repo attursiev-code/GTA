@@ -27,7 +27,9 @@ class WellStatus(str, Enum):
 class GtmType(str, Enum):
     OPZ = "opz"
     GRP = "grp"
-    RIR = "rir"
+    RIR_SQUEEZE = "rir_squeeze"
+    RIR_SELECTIVE = "rir_selective"
+    RIR_INTERVAL_SWITCH = "rir_interval_switch"
     ZBS = "zbs"
     PUMP_UP = "pump_up"
     PUMP_DOWN = "pump_down"
@@ -42,13 +44,24 @@ class GtmType(str, Enum):
 GTM_LABELS = {
     GtmType.OPZ: "ОПЗ (обработка призабойной зоны)",
     GtmType.GRP: "ГРП (гидроразрыв пласта)",
-    GtmType.RIR: "РИР (водоизоляционные работы)",
+    GtmType.RIR_SQUEEZE: "РИР: сквозная заливка (тампонирование)",
+    GtmType.RIR_SELECTIVE: "РИР: селективная изоляция пропластка",
+    GtmType.RIR_INTERVAL_SWITCH: "РИР: перевод на другие интервалы",
     GtmType.ZBS: "ЗБС (зарезка бокового ствола)",
     GtmType.PUMP_UP: "Смена насоса (увеличение производительности)",
     GtmType.PUMP_DOWN: "Смена насоса (уменьшение производительности)",
     GtmType.PERFORATION: "Доперфорация пласта",
     GtmType.REACTIVATION: "Вывод из бездействия",
 }
+
+
+@dataclass
+class ProductionPoint:
+    """Точка истории добычи скважины: дата, дебит нефти и дебит воды."""
+
+    date: str
+    qo: float
+    qw: float
 
 
 @dataclass
@@ -82,6 +95,7 @@ class Well:
     months_since_last_gtm: int = 999  # месяцев с последнего ГТМ на скважине
 
     notes: str = ""
+    history: list[ProductionPoint] = field(default_factory=list)
 
     def __post_init__(self):
         self.status = WellStatus.from_any(self.status)
@@ -114,6 +128,12 @@ class Well:
     def from_dict(cls, d: dict) -> "Well":
         data = dict(d)
         data["status"] = WellStatus.from_any(data.get("status", "active"))
+        history = data.get("history")
+        if history:
+            data["history"] = [
+                p if isinstance(p, ProductionPoint) else ProductionPoint(**p)
+                for p in history
+            ]
         allowed = {f for f in cls.__dataclass_fields__}
         data = {k: v for k, v in data.items() if k in allowed}
         return cls(**data)
