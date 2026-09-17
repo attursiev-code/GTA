@@ -72,6 +72,8 @@ class Well:
     name: str
     formation: str = ""
     status: WellStatus = WellStatus.ACTIVE
+    perforation_interval: str = ""  # интервал перфорации (как есть из базы)
+    horizon: str = ""               # геологический горизонт (как есть из базы)
 
     qo: float = 0.0            # дебит нефти, т/сут
     ql: float = 0.0            # дебит жидкости, т/сут
@@ -147,6 +149,8 @@ class Candidate:
     matched: bool
     reasons: list[str] = field(default_factory=list)
     delta_qo: float = 0.0  # ожидаемый прирост дебита нефти, т/сут
+    mechanism: str = ""    # диагностированный механизм обводнения (текстом), если применимо
+    notes: list[str] = field(default_factory=list)  # технические детали диагностики
 
 
 @dataclass
@@ -164,7 +168,12 @@ class Recommendation:
     economic_effect: float     # руб. = revenue - cost
     payback_months: float | None
     roi: float | None
+    matched: bool = True   # False — РИР рассмотрен, но не рекомендован (механизм CONING/STABLE/INSUFFICIENT_DATA)
+    mechanism: str = ""    # диагностированный механизм обводнения (текстом)
+    notes: list[str] = field(default_factory=list)  # технические детали диагностики
 
     @property
     def gtm_label(self) -> str:
+        if not self.matched:
+            return "РИР не рекомендуется"
         return self.gtm_type.label

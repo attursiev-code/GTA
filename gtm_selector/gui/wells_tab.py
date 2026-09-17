@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
 from ..models import Well
-from ..data_io import load_wells_csv, save_wells_csv
+from ..data_io import load_field_database, load_wells_csv, save_wells_csv
 from .well_dialog import WellDialog
 
 COLUMNS = [
@@ -39,6 +39,7 @@ class WellsTab(ttk.Frame):
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(toolbar, text="Импорт CSV...", command=self.import_csv).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Экспорт CSV...", command=self.export_csv).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Импорт базы (Excel)...", command=self.import_field_database).pack(side="left", padx=2)
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(toolbar, text="Загрузить пример", command=self.load_sample).pack(side="left", padx=2)
 
@@ -141,6 +142,42 @@ class WellsTab(ttk.Frame):
         self.app.mark_dirty()
         self.refresh()
         messagebox.showinfo("Импорт завершён", f"Добавлено: {added}, обновлено: {replaced}")
+
+    def import_field_database(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel файлы", "*.xlsx"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        try:
+            new_wells, coords, warnings = load_field_database(path)
+        except Exception as exc:
+            messagebox.showerror("Ошибка импорта базы", str(exc))
+            return
+
+        existing_ids = {w.id for w in self.wells}
+        added, replaced = 0, 0
+        for w in new_wells:
+            if w.id in existing_ids:
+                idx = next(i for i, ww in enumerate(self.wells) if ww.id == w.id)
+                self.wells[idx] = w
+                replaced += 1
+            else:
+                self.wells.append(w)
+                added += 1
+
+        self.app.field_coordinates.update(coords)
+        self.app.mark_dirty()
+        self.refresh()
+
+        summary = (
+            f"Добавлено скважин: {added}\n"
+            f"Обновлено скважин: {replaced}\n"
+            f"Координат загружено: {len(coords)}"
+        )
+        if warnings:
+            summary += "\n\nПредупреждения:\n" + "\n".join(f"• {w}" for w in warnings)
+            messagebox.showwarning("Импорт базы завершён", summary)
+        else:
+            messagebox.showinfo("Импорт базы завершён", summary)
 
     def export_csv(self):
         if not self.wells:

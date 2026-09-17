@@ -11,7 +11,29 @@ DAYS_PER_MONTH = 30.4
 def evaluate_economics(
     well: Well, candidate: Candidate, econ: EconomicParams
 ) -> Recommendation:
-    """Считает прирост добычи, выручку, затраты и эффект по кандидату."""
+    """Считает прирост добычи, выручку, затраты и эффект по кандидату.
+
+    Для кандидатов с ``matched=False`` (диагностика проведена, но ГТМ не
+    рекомендован) экономика не считается — возвращается нулевая рекомендация,
+    сохраняющая механизм и обоснование для отображения пользователю.
+    """
+    if not candidate.matched:
+        return Recommendation(
+            well_id=well.id,
+            well_name=well.name,
+            gtm_type=candidate.gtm_type,
+            reasons=list(candidate.reasons),
+            delta_qo=0.0,
+            incremental_production=0.0,
+            revenue=0.0,
+            cost=0.0,
+            economic_effect=0.0,
+            payback_months=None,
+            roi=None,
+            matched=False,
+            mechanism=candidate.mechanism,
+            notes=list(candidate.notes),
+        )
 
     decline = max(0.0, min(econ.monthly_decline_pct / 100.0, 0.9))
     months = max(1, econ.effect_duration_months)
@@ -44,4 +66,7 @@ def evaluate_economics(
         economic_effect=economic_effect,
         payback_months=payback_months,
         roi=roi,
+        matched=True,
+        mechanism=candidate.mechanism,
+        notes=list(candidate.notes),
     )
