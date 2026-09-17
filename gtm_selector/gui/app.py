@@ -26,6 +26,9 @@ class App(tk.Tk):
         self.settings: Settings = Settings()
         self.project_path: str | None = None
         self.dirty: bool = False
+        # Координаты устьев скважин {well_id: (x, y)} из последней импортированной
+        # базы (Excel); отдельно от Well — связность используется позже.
+        self.field_coordinates: dict[str, tuple[float, float]] = {}
 
         self._build_menu()
         self._build_ui()
@@ -98,6 +101,7 @@ class App(tk.Tk):
         self.settings = Settings()
         self.project_path = None
         self.dirty = False
+        self.field_coordinates = {}
         self.wells_tab.refresh()
         self.settings_tab.load_from_settings()
         self._update_title()
@@ -118,6 +122,7 @@ class App(tk.Tk):
         self.settings = settings
         self.project_path = path
         self.dirty = False
+        self.field_coordinates = {}
         self.wells_tab.refresh()
         self.settings_tab.load_from_settings()
         self._update_title()

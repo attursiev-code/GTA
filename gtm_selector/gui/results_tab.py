@@ -13,6 +13,7 @@ COLUMNS = [
     ("well_id", "№ скв.", 70),
     ("well_name", "Название", 100),
     ("gtm_label", "Рекомендуемое ГТМ", 220),
+    ("mechanism", "Механизм обводнения", 190),
     ("delta_qo", "ΔQн, т/сут", 90),
     ("incremental_production", "Доп. добыча, т", 110),
     ("revenue", "Выручка, руб.", 120),
@@ -71,6 +72,7 @@ class ResultsTab(ttk.Frame):
             self.tree.column(key, width=width, anchor="center")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda e: self.show_reasons())
+        self.tree.tag_configure("not_recommended", foreground="#888888")
 
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -95,17 +97,22 @@ class ResultsTab(ttk.Frame):
         if label == "Все":
             filtered = self.recommendations
         else:
+            # Не рекомендованные (диагностированные, но matched=False) случаи
+            # показываем только в общем списке «Все» — у них нет содержательного
+            # gtm_type, только служебная заглушка.
             gtm_type = next(t for t in GtmType if t.label == label)
-            filtered = [r for r in self.recommendations if r.gtm_type == gtm_type]
+            filtered = [r for r in self.recommendations if r.matched and r.gtm_type == gtm_type]
         self._populate(filtered)
 
     def _populate(self, recs):
         self.tree.delete(*self.tree.get_children())
         total_effect = 0.0
+        not_recommended = 0
         for i, r in enumerate(recs):
             iid = str(i)
-            self.tree.insert("", "end", iid=iid, values=(
-                r.well_id, r.well_name, r.gtm_label,
+            tags = () if r.matched else ("not_recommended",)
+            self.tree.insert("", "end", iid=iid, tags=tags, values=(
+                r.well_id, r.well_name, r.gtm_label, r.mechanism or "—",
                 f"{r.delta_qo:.2f}", f"{r.incremental_production:.0f}",
                 f"{r.revenue:,.0f}".replace(",", " "),
                 f"{r.cost:,.0f}".replace(",", " "),
@@ -114,9 +121,15 @@ class ResultsTab(ttk.Frame):
                 f"{r.roi:.2f}" if r.roi is not None else "-",
             ))
             total_effect += r.economic_effect
+            if not r.matched:
+                not_recommended += 1
         self._filtered = recs
         self.summary_label.config(
-            text=f"Рекомендаций: {len(recs)}   Суммарный эффект: {total_effect:,.0f} руб.".replace(",", " ")
+            text=(
+                f"Рекомендаций: {len(recs) - not_recommended}   "
+                f"Не рекомендуется: {not_recommended}   "
+                f"Суммарный эффект: {total_effect:,.0f} руб."
+            ).replace(",", " ")
         )
 
     def show_reasons(self):
@@ -126,7 +139,18 @@ class ResultsTab(ttk.Frame):
             return
         idx = int(sel[0])
         rec = self._filtered[idx]
-        text = "\n".join(f"• {r}" for r in rec.reasons) or "Нет данных об обосновании."
+
+        lines = [f"Механизм обводнения: {rec.mechanism or '—'}", ""]
+        lines.append("Обоснование:")
+        if rec.reasons:
+            lines.extend(f"• {r}" for r in rec.reasons)
+        else:
+            lines.append("Нет данных об обосновании.")
+        if rec.notes:
+            lines.append("")
+            lines.append("Технические детали диагностики:")
+            lines.extend(f"• {n}" for n in rec.notes)
+        text = "\n".join(lines)
         messagebox.showinfo(
             f"Обоснование: {rec.well_name} — {rec.gtm_label}",
             text,

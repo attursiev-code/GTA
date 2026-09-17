@@ -15,7 +15,10 @@ def select_gtm(
 
     Возвращает список рекомендаций, отсортированный по убыванию
     экономического эффекта. Если ``only_profitable`` — оставляет
-    только рекомендации с положительным эффектом.
+    только рекомендации с положительным эффектом. Не рекомендованные
+    диагностированные случаи (``matched=False``, например РИР при механизме
+    CONING/STABLE/INSUFFICIENT_DATA) фильтром рентабельности не убираются —
+    они должны быть явно видны пользователю независимо от настройки.
     """
     recommendations: list[Recommendation] = []
 
@@ -23,7 +26,7 @@ def select_gtm(
         candidates = evaluate_well(well, settings.thresholds)
         for candidate in candidates:
             rec = evaluate_economics(well, candidate, settings.economics)
-            if only_profitable and rec.economic_effect <= 0:
+            if only_profitable and rec.matched and rec.economic_effect <= 0:
                 continue
             recommendations.append(rec)
 
