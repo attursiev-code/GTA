@@ -14,13 +14,6 @@ COLUMNS = [
     ("well_name", "Название", 100),
     ("gtm_label", "Рекомендуемое ГТМ", 220),
     ("mechanism", "Механизм обводнения", 190),
-    ("delta_qo", "ΔQн, т/сут", 90),
-    ("incremental_production", "Доп. добыча, т", 110),
-    ("revenue", "Выручка, руб.", 120),
-    ("cost", "Затраты, руб.", 120),
-    ("economic_effect", "Эффект, руб.", 130),
-    ("payback_months", "Окупаемость, мес.", 120),
-    ("roi", "ROI", 60),
 ]
 
 
@@ -35,12 +28,6 @@ class ResultsTab(ttk.Frame):
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", pady=(0, 6))
         ttk.Button(toolbar, text="Выполнить подбор", command=self.run_selection).pack(side="left", padx=2)
-
-        self.only_profitable = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            toolbar, text="Только рентабельные", variable=self.only_profitable,
-            command=self.run_selection,
-        ).pack(side="left", padx=8)
 
         self.best_only = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -86,7 +73,7 @@ class ResultsTab(ttk.Frame):
             self.recommendations = []
             self._populate([])
             return
-        recs = select_gtm(wells, self.app.settings, only_profitable=self.only_profitable.get())
+        recs = select_gtm(wells, self.app.settings)
         if self.best_only.get():
             recs = best_recommendation_per_well(recs)
         self.recommendations = recs
@@ -106,30 +93,18 @@ class ResultsTab(ttk.Frame):
 
     def _populate(self, recs):
         self.tree.delete(*self.tree.get_children())
-        total_effect = 0.0
         not_recommended = 0
         for i, r in enumerate(recs):
             iid = str(i)
             tags = () if r.matched else ("not_recommended",)
             self.tree.insert("", "end", iid=iid, tags=tags, values=(
                 r.well_id, r.well_name, r.gtm_label, r.mechanism or "—",
-                f"{r.delta_qo:.2f}", f"{r.incremental_production:.0f}",
-                f"{r.revenue:,.0f}".replace(",", " "),
-                f"{r.cost:,.0f}".replace(",", " "),
-                f"{r.economic_effect:,.0f}".replace(",", " "),
-                f"{r.payback_months:.1f}" if r.payback_months else "-",
-                f"{r.roi:.2f}" if r.roi is not None else "-",
             ))
-            total_effect += r.economic_effect
             if not r.matched:
                 not_recommended += 1
         self._filtered = recs
         self.summary_label.config(
-            text=(
-                f"Рекомендаций: {len(recs) - not_recommended}   "
-                f"Не рекомендуется: {not_recommended}   "
-                f"Суммарный эффект: {total_effect:,.0f} руб."
-            ).replace(",", " ")
+            text=f"Рекомендаций: {len(recs) - not_recommended}   Не рекомендуется: {not_recommended}"
         )
 
     def show_reasons(self):
