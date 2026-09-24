@@ -100,6 +100,10 @@ def check_rir(well: Well, t: Thresholds) -> Candidate:
         f"Выработка запасов {well.depletion:.1f}% ≤ {t.rir_depletion_max:.1f}% — есть смысл изолировать",
     ]
     reasons = [*threshold_reasons, *diag.reasons]
+    # Подтверждающий признак (не отдельный диагноз): значимое падение
+    # продуктивности усиливает уверенность в поставленном диагнозе.
+    if diag.productivity and diag.productivity.get("significant"):
+        reasons.append(diag.productivity["note"])
 
     mapping = _RIR_MECHANISM_MAP.get(diag.mechanism)
     if mapping is None:

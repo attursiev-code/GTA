@@ -12,6 +12,12 @@
 
 Перед расчётом производной ряд ВНФ сглаживается скользящим средним, чтобы
 помесячный шум промысловых данных не давал ложных локальных пиков.
+
+Дополнительно (не как отдельный диагноз, а как подтверждающий признак поверх
+уже поставленного) сравнивается начальная и текущая продуктивность скважины
+по дебиту нефти (``check_productivity_decline``) — сильное падение дебита
+усиливает уверенность в том, что диагностированное обводнение действительно
+снижает продуктивность.
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ class DiagnosticResult:
     wor_series: list[float] = field(default_factory=list)
     wor_prime_series: list[float] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    productivity: dict | None = None
 
 
 def _parse_date(date_str: str) -> datetime:
@@ -92,6 +99,57 @@ def _significant_peaks_count(series: list[float], threshold: float) -> int:
     return count
 
 
+def check_productivity_decline(
+    history: list[ProductionPoint],
+    decline_threshold_pct: float = 40.0,
+) -> dict:
+    """Сравнивает начальную и текущую продуктивность скважины по дебиту нефти.
+
+    Это не отдельный диагноз, а дополнительный подтверждающий признак поверх
+    уже поставленного диагноза механизма обводнения: сильное падение дебита
+    нефти с начала истории подтверждает, что обводнение действительно снижает
+    продуктивность (а не является статистическим шумом на фоне стабильного
+    дебита). Начальный дебит усредняется по первым 2-3 точкам (чтобы
+    сгладить случайный первый замер), текущий — по последним 2-3 точкам.
+    """
+    valid = sorted((p for p in history if p.qo > 0), key=lambda p: p.date)
+
+    if len(valid) < 4:
+        return {
+            "initial_qo": 0.0,
+            "current_qo": 0.0,
+            "decline_pct": 0.0,
+            "significant": False,
+            "note": (
+                f"Недостаточно точек истории (< 4) для оценки падения "
+                f"продуктивности: {len(valid)}"
+            ),
+        }
+
+    window = 3 if len(valid) >= 6 else 2
+    initial_pts = valid[:window]
+    current_pts = valid[-window:]
+    initial_qo = sum(p.qo for p in initial_pts) / len(initial_pts)
+    current_qo = sum(p.qo for p in current_pts) / len(current_pts)
+
+    decline_pct = ((initial_qo - current_qo) / initial_qo * 100.0) if initial_qo > 0 else 0.0
+    significant = decline_pct >= decline_threshold_pct
+
+    note = (
+        f"Начальный дебит нефти составлял {initial_qo:.1f} т/сут, текущий — "
+        f"{current_qo:.1f} т/сут (падение на {decline_pct:.0f}%) — подтверждает, "
+        "что проблема обводнения существенно снизила продуктивность скважины"
+    )
+
+    return {
+        "initial_qo": initial_qo,
+        "current_qo": current_qo,
+        "decline_pct": decline_pct,
+        "significant": significant,
+        "note": note,
+    }
+
+
 def classify_water_mechanism(
     history: list[ProductionPoint],
     min_points: int = 6,
@@ -123,6 +181,11 @@ def classify_water_mechanism(
             ],
             notes=notes,
         )
+
+    # Дополнительный подтверждающий признак (не меняет диагноз механизма,
+    # только усиливает/ослабляет уверенность в нём) — сравнение начальной и
+    # текущей продуктивности скважины по дебиту нефти.
+    productivity = check_productivity_decline(valid)
 
     t0 = _parse_date(valid[0].date)
     days = [(_parse_date(p.date) - t0).days for p in valid]
@@ -187,7 +250,10 @@ def classify_water_mechanism(
             "признак локального прорыва воды вблизи забоя (негерметичность "
             "колонны/трещина)"
         ]
-        return DiagnosticResult(WaterMechanism.NEAR_WELLBORE, 0.85, reasons, wor_raw, wor_prime, notes)
+        return DiagnosticResult(
+            WaterMechanism.NEAR_WELLBORE, 0.85, reasons, wor_raw, wor_prime, notes,
+            productivity=productivity,
+        )
 
     # 2. Устойчиво положительный тренд производной -> CHANNELING.
     #    Проверяется раньше подсчёта пиков: общий тренд важнее локальных колебаний.
@@ -198,7 +264,10 @@ def classify_water_mechanism(
             "признак прогрессирующего прорыва воды по промытому каналу "
             "(заколонный переток)"
         ]
-        return DiagnosticResult(WaterMechanism.CHANNELING, 0.75, reasons, wor_raw, wor_prime, notes)
+        return DiagnosticResult(
+            WaterMechanism.CHANNELING, 0.75, reasons, wor_raw, wor_prime, notes,
+            productivity=productivity,
+        )
 
     # 3. Несколько повторяющихся значимых пиков производной -> MULTILAYER.
     #    Значимым считается пик, где |ВНФ'| превышает фон минимум в 3-4 раза
@@ -219,7 +288,10 @@ def classify_water_mechanism(
             "выраженного монотонного тренда — признак неравномерной, чередующейся "
             "выработки нескольких пропластков многопластовой системы"
         ]
-        return DiagnosticResult(WaterMechanism.MULTILAYER, 0.7, reasons, wor_raw, wor_prime, notes)
+        return DiagnosticResult(
+            WaterMechanism.MULTILAYER, 0.7, reasons, wor_raw, wor_prime, notes,
+            productivity=productivity,
+        )
 
     # 4. Спад производной после начального роста -> CONING
     half = len(analysis) // 2
@@ -234,7 +306,13 @@ def classify_water_mechanism(
                 "для конусообразования; РИР в этом случае не показан — конус "
                 "лечится сменой режима отбора, а не изоляцией интервала"
             ]
-            return DiagnosticResult(WaterMechanism.CONING, 0.65, reasons, wor_raw, wor_prime, notes)
+            return DiagnosticResult(
+                WaterMechanism.CONING, 0.65, reasons, wor_raw, wor_prime, notes,
+                productivity=productivity,
+            )
 
     reasons = ["Форма кривой ВНФ и её производной не выявляет выраженной аномалии обводнения"]
-    return DiagnosticResult(WaterMechanism.STABLE, 0.5, reasons, wor_raw, wor_prime, notes)
+    return DiagnosticResult(
+        WaterMechanism.STABLE, 0.5, reasons, wor_raw, wor_prime, notes,
+        productivity=productivity,
+    )
