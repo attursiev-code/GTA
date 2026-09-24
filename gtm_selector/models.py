@@ -143,7 +143,13 @@ class Well:
 
 @dataclass
 class Candidate:
-    """Кандидат на проведение ГТМ по конкретной скважине с обоснованием."""
+    """Кандидат на проведение ГТМ по конкретной скважине с обоснованием.
+
+    Текущий поток подбора РИР — чисто диагностический, без экономики
+    (см. ``engine.select_gtm``): ``Candidate`` заполняется полями
+    ``well_id``/``well_name`` прямо там и используется как результат
+    подбора напрямую, без промежуточного ``Recommendation``.
+    """
 
     gtm_type: GtmType
     matched: bool
@@ -151,11 +157,24 @@ class Candidate:
     delta_qo: float = 0.0  # ожидаемый прирост дебита нефти, т/сут
     mechanism: str = ""    # диагностированный механизм обводнения (текстом), если применимо
     notes: list[str] = field(default_factory=list)  # технические детали диагностики
+    well_id: str = ""       # заполняется в engine.select_gtm
+    well_name: str = ""     # заполняется в engine.select_gtm
+
+    @property
+    def gtm_label(self) -> str:
+        if not self.matched:
+            return "РИР не рекомендуется"
+        return self.gtm_type.label
 
 
 @dataclass
 class Recommendation:
-    """Итоговая рекомендация по ГТМ с экономической оценкой."""
+    """Итоговая рекомендация по ГТМ с экономической оценкой.
+
+    Не используется в текущем потоке подбора РИР (там результат — это
+    ``Candidate``, см. ``engine.select_gtm``) — класс сохранён для будущего
+    возврата экономического блока (когда появятся актуальные цены).
+    """
 
     well_id: str
     well_name: str

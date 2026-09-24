@@ -7,7 +7,7 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
-from .models import ProductionPoint, Well, Recommendation
+from .models import Candidate, ProductionPoint, Well
 from .params import Settings
 
 # Колонки листа "Добыча" в реальной базе (ищем по названию, не по номеру).
@@ -291,12 +291,8 @@ def save_wells_csv(wells: list[Well], path: str | Path) -> None:
             writer.writerow({k: d.get(k, "") for k in WELL_FIELDS})
 
 
-def save_recommendations_csv(recs: list[Recommendation], path: str | Path) -> None:
-    fieldnames = [
-        "well_id", "well_name", "matched", "gtm_type", "gtm_label", "mechanism",
-        "delta_qo", "incremental_production", "revenue", "cost",
-        "economic_effect", "payback_months", "roi", "reasons", "notes",
-    ]
+def save_recommendations_csv(recs: list[Candidate], path: str | Path) -> None:
+    fieldnames = ["well_id", "well_name", "gtm_type", "gtm_label", "mechanism", "reasons"]
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -304,19 +300,10 @@ def save_recommendations_csv(recs: list[Recommendation], path: str | Path) -> No
             writer.writerow({
                 "well_id": r.well_id,
                 "well_name": r.well_name,
-                "matched": "Да" if r.matched else "Нет",
                 "gtm_type": r.gtm_type.value,
                 "gtm_label": r.gtm_label,
                 "mechanism": r.mechanism,
-                "delta_qo": round(r.delta_qo, 2),
-                "incremental_production": round(r.incremental_production, 1),
-                "revenue": round(r.revenue, 0),
-                "cost": round(r.cost, 0),
-                "economic_effect": round(r.economic_effect, 0),
-                "payback_months": r.payback_months,
-                "roi": round(r.roi, 2) if r.roi is not None else "",
                 "reasons": "; ".join(r.reasons),
-                "notes": "; ".join(r.notes),
             })
 
 
