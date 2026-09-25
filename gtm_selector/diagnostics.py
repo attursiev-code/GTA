@@ -117,6 +117,23 @@ def _watercut_rate_per_month(watercut_series: list[float], days: list[int], i0: 
     return ((watercut_series[i1] - watercut_series[i0]) / dt * 30.4) if dt > 0 else 0.0
 
 
+def _best_rise_near(watercut_series: list[float], k: int, window: int = 2) -> tuple[int | None, float]:
+    """Ищет наибольший РЕАЛЬНЫЙ (несглаженный) рост обводнённости рядом со
+    сглаженным индексом пика k (сглаживание может сдвигать пик на 1-2
+    интервала относительно фактических данных — см. NEAR_WELLBORE). Возвращает
+    (индекс конца перехода, величина роста в п.п.) или (None, 0.0), если рядом
+    нет ни одного роста."""
+    n = len(watercut_series)
+    lo = max(1, k - window)
+    hi = min(n - 1, k + 1 + window)
+    best_idx, best_jump = None, 0.0
+    for i in range(lo, hi + 1):
+        jump = watercut_series[i] - watercut_series[i - 1]
+        if jump > best_jump:
+            best_jump, best_idx = jump, i
+    return best_idx, best_jump
+
+
 def check_productivity_decline(
     history: list[ProductionPoint],
     decline_threshold_pct: float = 40.0,
@@ -251,17 +268,31 @@ def classify_water_mechanism(
     notes.append(
         f"Средний темп роста обводнённости за период: {wc_avg_rate_per_month:+.2f} п.п./мес"
     )
+    # Наибольший скачок обводнённости по модулю (в любую сторону) — используется
+    # только для описания NEAR_WELLBORE ниже, где направление важно (скачок может
+    # быть и падением — например, техногенный останов/ошибка замера).
     max_jump_idx, max_jump = None, 0.0
     for i in range(1, len(watercut_series)):
         jump = watercut_series[i] - watercut_series[i - 1]
         if abs(jump) > abs(max_jump):
             max_jump, max_jump_idx = jump, i
-    if max_jump_idx is not None:
+
+    # Для технического блока показываем только РОСТ обводнённости: падение
+    # обводнённости не является признаком прорыва воды (это может быть, например,
+    # ремонт или смена режима) и не должно маскировать реальный рост под "скачок".
+    max_rise_idx, max_rise = None, 0.0
+    for i in range(1, len(watercut_series)):
+        jump = watercut_series[i] - watercut_series[i - 1]
+        if jump > 0 and jump > max_rise:
+            max_rise, max_rise_idx = jump, i
+    if max_rise_idx is not None:
         notes.append(
-            f"Максимальный зафиксированный скачок обводнённости: с "
-            f"{watercut_series[max_jump_idx - 1]:.1f}% до {watercut_series[max_jump_idx]:.1f}% "
-            f"за один отчётный период ({valid[max_jump_idx].date})"
+            f"Максимальный зафиксированный скачок обводнённости (рост): с "
+            f"{watercut_series[max_rise_idx - 1]:.1f}% до {watercut_series[max_rise_idx]:.1f}% "
+            f"за один отчётный период ({valid[max_rise_idx].date})"
         )
+    else:
+        notes.append("Значимых скачков роста обводнённости не обнаружено")
 
     # 1. Изолированный экстремальный скачок производной ВНФ -> NEAR_WELLBORE
     #    (текст — через скачок обводнённости в этой же точке, а не через ВНФ)
@@ -313,14 +344,34 @@ def classify_water_mechanism(
     #    (доля от spike_ratio, но не менее 3.0), и только если общий тренд
     #    не является чисто монотонным (иначе это уже CHANNELING/спад, а не
     #    чередующаяся выработка нескольких пропластков).
+    #    Учитываются ТОЛЬКО положительные экстремумы производной (рост
+    #    обводнённости) — резкое падение (например, техногенное: ремонт, смена
+    #    режима, ошибка замера) не является признаком многослойного перетока и
+    #    не должно увеличивать счётчик "значимых пиков". Фильтруем по знаку
+    #    самой (сглаженной) производной, а не по сырой обводнённости в той же
+    #    точке — сглаживание может сдвигать пик на соседний интервал, и прямое
+    #    сравнение с несглаженными значениями там ненадёжно (см. NEAR_WELLBORE).
     peak_factor = max(_MULTILAYER_PEAK_FACTOR_MIN, spike_ratio / 2.0)
     peak_threshold = baseline_avg * peak_factor
-    peak_indices = _significant_peak_indices(analysis, peak_threshold)
-    significant_peaks = len(peak_indices)
+    candidate_peaks = [
+        k for k in _significant_peak_indices(analysis, peak_threshold)
+        if analysis[k] > 0
+    ]
+    # Соседние сглаженные индексы пика могут указывать на один и тот же реальный
+    # скачок (сглаживание "размазывает" его на несколько интервалов) — схлопываем
+    # такие дубликаты, прежде чем считать число различных эпизодов роста.
+    seen_raw_idx: set[int] = set()
+    rise_events: list[int] = []
+    for k in candidate_peaks:
+        idx, _jump = _best_rise_near(watercut_series, k)
+        if idx is not None and idx not in seen_raw_idx:
+            seen_raw_idx.add(idx)
+            rise_events.append(idx)
+    significant_peaks = len(rise_events)
     if not is_monotonic_trend and significant_peaks >= 2:
         episodes = [
-            f"с {watercut_series[k]:.1f}% до {watercut_series[k + 1]:.1f}% ({valid[k + 1].date})"
-            for k in peak_indices
+            f"с {watercut_series[idx - 1]:.1f}% до {watercut_series[idx]:.1f}% ({valid[idx].date})"
+            for idx in rise_events
         ]
         reasons = [
             f"Выявлено {significant_peaks} эпизода(ов) резкого роста обводнённости за период "

@@ -97,7 +97,6 @@ def check_rir(well: Well, t: Thresholds) -> Candidate:
 
     threshold_reasons = [
         f"Обводнённость {well.watercut:.1f}% ≥ {t.rir_watercut_min:.1f}% — прорыв воды",
-        f"Выработка запасов {well.depletion:.1f}% ≤ {t.rir_depletion_max:.1f}% — есть смысл изолировать",
     ]
     reasons = [*threshold_reasons, *diag.reasons]
     # Подтверждающий признак (не отдельный диагноз): значимое падение
