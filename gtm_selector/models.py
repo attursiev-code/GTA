@@ -99,6 +99,11 @@ class Well:
     notes: str = ""
     history: list[ProductionPoint] = field(default_factory=list)
 
+    # Петрофизика по ГИС/керну в интервале перфорации (импорт LAS, см. las_io.py)
+    log_porosity: float | None = None           # пористость (PHIE), доли ед.
+    log_water_saturation: float | None = None   # начальная водонасыщенность, %
+    log_permeability: float | None = None        # проницаемость по керну, мД
+
     def __post_init__(self):
         self.status = WellStatus.from_any(self.status)
 

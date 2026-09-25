@@ -4,11 +4,32 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 
 from .models import Candidate, ProductionPoint, Well
 from .params import Settings
+
+_INTERVAL_RE = re.compile(r"(\d+(?:,\d+)?)\s*-\s*(\d+(?:,\d+)?)")
+
+
+def parse_perforation_intervals(text: str) -> list[tuple[float, float]]:
+    """Разбирает текст интервала перфорации на подынтервалы (кровля, подошва).
+
+    Формат: подынтервалы разделены ';', внутри подынтервала — 'кровля-подошва',
+    запятая внутри числа — десятичный разделитель (например,
+    ``'1003-1005,3; 1025-1028'`` -> ``[(1003.0, 1005.3), (1025.0, 1028.0)]``).
+    Нераспознанные фрагменты просто пропускаются, ошибку не вызывают.
+    """
+    if not text:
+        return []
+    intervals = []
+    for top_str, bottom_str in _INTERVAL_RE.findall(text):
+        top = float(top_str.replace(",", "."))
+        bottom = float(bottom_str.replace(",", "."))
+        intervals.append((top, bottom))
+    return intervals
 
 # Колонки листа "Добыча" в реальной базе (ищем по названию, не по номеру).
 _PROD_COL_WELL = "Скважина"

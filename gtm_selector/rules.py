@@ -105,6 +105,20 @@ def check_rir(well: Well, t: Thresholds) -> Candidate:
     if diag.productivity and diag.productivity.get("significant"):
         reasons.append(diag.productivity["note"])
 
+    # Геологический контекст по ГИС/керну (не влияет на диагноз, только
+    # поясняет его) — добавляется, только если данные по скважине заполнены.
+    if well.log_water_saturation is not None:
+        # TODO: порог 35% для "переходной зоны" условный, уточнить по факту.
+        zone = "ближе к переходной зоне" if well.log_water_saturation >= 35.0 else "преимущественно нефтяным"
+        reasons.append(
+            f"Начальная водонасыщенность интервала перфорации по ГИС: "
+            f"{well.log_water_saturation:.0f}% — интервал изначально был {zone}"
+        )
+    if well.log_permeability is not None:
+        reasons.append(
+            f"Проницаемость по керну в интервале перфорации: {well.log_permeability:.1f} мД"
+        )
+
     mapping = _RIR_MECHANISM_MAP.get(diag.mechanism)
     if mapping is None:
         return Candidate(
