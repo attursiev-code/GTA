@@ -18,6 +18,11 @@
 по дебиту нефти (``check_productivity_decline``) — сильное падение дебита
 усиливает уверенность в том, что диагностированное обводнение действительно
 снижает продуктивность.
+
+Термин «ВНФ» — это внутренняя расчётная величина (не насыщается при
+приближении к 100% обводнённости, в отличие от процента). Весь текст,
+который увидит пользователь (``reasons``/``notes`` в ``DiagnosticResult``),
+формулируется только через обводнённость в процентах/процентных пунктах.
 """
 
 from __future__ import annotations
@@ -91,12 +96,25 @@ def _linear_trend(series: list[float]) -> float:
     return num / den if den else 0.0
 
 
-def _significant_peaks_count(series: list[float], threshold: float) -> int:
-    count = 0
+def _significant_peak_indices(series: list[float], threshold: float) -> list[int]:
+    """Индексы локальных максимумов |series[i]|, превышающих threshold."""
+    indices = []
     for i in range(1, len(series) - 1):
         if series[i] > series[i - 1] and series[i] > series[i + 1] and abs(series[i]) > threshold:
-            count += 1
-    return count
+            indices.append(i)
+    return indices
+
+
+def _watercut_pct(p: ProductionPoint) -> float:
+    """Обводнённость точки истории в процентах: Qв/(Qн+Qв)*100."""
+    total = p.qo + p.qw
+    return (100.0 * p.qw / total) if total > 0 else 0.0
+
+
+def _watercut_rate_per_month(watercut_series: list[float], days: list[int], i0: int, i1: int) -> float:
+    """Средний темп изменения обводнённости между точками i0 и i1, в п.п./мес."""
+    dt = days[i1] - days[i0]
+    return ((watercut_series[i1] - watercut_series[i0]) / dt * 30.4) if dt > 0 else 0.0
 
 
 def check_productivity_decline(
@@ -157,9 +175,13 @@ def classify_water_mechanism(
 ) -> DiagnosticResult:
     """Классифицирует механизм обводнения скважины по истории добычи.
 
-    Строит ряд ВНФ = Qв/Qн, сглаживает его скользящим средним и считает
-    производную по времени, затем сопоставляет форму кривой с типовыми
-    диагностическими признаками метода Chan.
+    Внутренне строит ряд ВНФ = Qв/Qн (отношение воды к нефти — в отличие от
+    процента обводнённости не насыщается при приближении к 100% и остаётся
+    информативным на высокой обводнённости), сглаживает его скользящим
+    средним и считает производную по времени, сопоставляя форму кривой с
+    типовыми диагностическими признаками метода Chan. Весь текст, который
+    видит пользователь (reasons/notes), формулируется только через проценты
+    обводнённости — внутренний расчёт на ВНФ сам по себе не показывается.
     """
     notes: list[str] = []
 
@@ -190,13 +212,11 @@ def classify_water_mechanism(
     t0 = _parse_date(valid[0].date)
     days = [(_parse_date(p.date) - t0).days for p in valid]
     wor_raw = [p.qw / p.qo for p in valid]
+    # Параллельный ряд обводнённости (%) для текста, который видит пользователь —
+    # исходные (несглаженные) значения, а не производная ВНФ.
+    watercut_series = [_watercut_pct(p) for p in valid]
 
     wor_smoothed = _moving_average(wor_raw, window=_SMOOTHING_WINDOW)
-    notes.append(
-        f"Сглаживание ряда ВНФ: скользящее среднее, окно={_SMOOTHING_WINDOW} точки "
-        "(на краях — усреднение по доступным соседям); производная считается по "
-        "сглаженному ряду"
-    )
 
     wor_prime = [0.0]
     for i in range(1, len(wor_smoothed)):
@@ -205,11 +225,11 @@ def classify_water_mechanism(
 
     analysis = wor_prime[1:]
     if not analysis:
-        notes.append("Недостаточно интервалов между точками для расчёта производной ВНФ")
+        notes.append("Недостаточно интервалов между точками для оценки динамики обводнённости")
         return DiagnosticResult(
             mechanism=WaterMechanism.INSUFFICIENT_DATA,
             confidence=0.0,
-            reasons=["Недостаточно интервалов между точками для расчёта производной ВНФ"],
+            reasons=["Недостаточно интервалов между точками для оценки динамики обводнённости"],
             wor_series=wor_raw,
             wor_prime_series=wor_prime,
             notes=notes,
@@ -224,17 +244,27 @@ def classify_water_mechanism(
     positive_share = sum(1 for v in analysis if v > 0) / len(analysis)
     slope = _linear_trend(analysis)
     is_monotonic_trend = positive_share >= 0.85 or positive_share <= 0.15
+
+    # Технический блок обоснования — только в процентах обводнённости и
+    # процентных пунктах (сам расчёт выше остаётся на ВНФ, здесь только текст).
+    wc_avg_rate_per_month = _watercut_rate_per_month(watercut_series, days, 0, len(valid) - 1)
     notes.append(
-        f"Доля точек с положительной производной ВНФ: {positive_share * 100:.0f}%; "
-        f"линейный тренд производной: {slope:+.6f}/сут; тренд монотонный: "
-        f"{'да' if is_monotonic_trend else 'нет'}"
+        f"Средний темп роста обводнённости за период: {wc_avg_rate_per_month:+.2f} п.п./мес"
     )
-    notes.append(
-        f"Фоновый уровень |ВНФ'| (нижняя половина выборки): {baseline_avg:.5f}; "
-        f"максимум |ВНФ'|: {peak_val:.5f} (точка №{peak_idx + 2})"
-    )
+    max_jump_idx, max_jump = None, 0.0
+    for i in range(1, len(watercut_series)):
+        jump = watercut_series[i] - watercut_series[i - 1]
+        if abs(jump) > abs(max_jump):
+            max_jump, max_jump_idx = jump, i
+    if max_jump_idx is not None:
+        notes.append(
+            f"Максимальный зафиксированный скачок обводнённости: с "
+            f"{watercut_series[max_jump_idx - 1]:.1f}% до {watercut_series[max_jump_idx]:.1f}% "
+            f"за один отчётный период ({valid[max_jump_idx].date})"
+        )
 
     # 1. Изолированный экстремальный скачок производной ВНФ -> NEAR_WELLBORE
+    #    (текст — через скачок обводнённости в этой же точке, а не через ВНФ)
     spike_threshold = spike_ratio * baseline_avg
     is_isolated_spike = (
         baseline_avg > 0
@@ -242,11 +272,20 @@ def classify_water_mechanism(
         and sum(1 for v in abs_vals if v >= spike_threshold * 0.5) <= 2
     )
     if is_isolated_spike:
+        # Смотрим на реальный (несглаженный) скачок обводнённости, а не на точку
+        # максимума сглаженной производной — сглаживание может «размазать» пик
+        # по соседним переходам и сдвинуть его относительно фактического выброса.
+        if max_jump_idx is not None:
+            wc_before, wc_after, jump_pp = watercut_series[max_jump_idx - 1], watercut_series[max_jump_idx], max_jump
+            spike_date = valid[max_jump_idx].date
+        else:
+            wc_before, wc_after = watercut_series[peak_idx], watercut_series[peak_idx + 1]
+            jump_pp = wc_after - wc_before
+            spike_date = valid[peak_idx + 1].date
+        direction = "подскочила" if jump_pp >= 0 else "упала"
         reasons = [
-            f"Изолированный экстремальный скачок производной ВНФ "
-            f"(d(ВНФ)/dt = {analysis[peak_idx]:.4f} на точке №{peak_idx + 2}) "
-            f"превышает фоновый уровень ({baseline_avg:.4f}) в "
-            f"{peak_val / baseline_avg:.1f} раз (порог {spike_ratio:.1f}) — "
+            f"Обводнённость резко {direction} на {abs(jump_pp):.1f} процентных пункта "
+            f"за один отчётный период (с {wc_before:.1f}% до {wc_after:.1f}%, {spike_date}) — "
             "признак локального прорыва воды вблизи забоя (негерметичность "
             "колонны/трещина)"
         ]
@@ -259,10 +298,10 @@ def classify_water_mechanism(
     #    Проверяется раньше подсчёта пиков: общий тренд важнее локальных колебаний.
     if positive_share >= 0.7 and slope >= 0:
         reasons = [
-            f"Производная ВНФ устойчиво положительна ({positive_share * 100:.0f}% "
-            f"точек, тренд {slope:+.5f}/сут) на всём периоде наблюдения — "
-            "признак прогрессирующего прорыва воды по промытому каналу "
-            "(заколонный переток)"
+            f"Обводнённость устойчиво растёт на всём периоде наблюдения — с "
+            f"{watercut_series[0]:.1f}% до {watercut_series[-1]:.1f}% (в среднем "
+            f"{wc_avg_rate_per_month:+.2f} п.п./мес) — признак прогрессирующего прорыва "
+            "воды по промытому каналу (заколонный переток)"
         ]
         return DiagnosticResult(
             WaterMechanism.CHANNELING, 0.75, reasons, wor_raw, wor_prime, notes,
@@ -276,17 +315,17 @@ def classify_water_mechanism(
     #    чередующаяся выработка нескольких пропластков).
     peak_factor = max(_MULTILAYER_PEAK_FACTOR_MIN, spike_ratio / 2.0)
     peak_threshold = baseline_avg * peak_factor
-    significant_peaks = _significant_peaks_count(analysis, peak_threshold)
-    notes.append(
-        f"Порог значимого пика для MULTILAYER: {peak_threshold:.5f} "
-        f"(коэффициент {peak_factor:.1f}× от фона); найдено значимых пиков: {significant_peaks}"
-    )
+    peak_indices = _significant_peak_indices(analysis, peak_threshold)
+    significant_peaks = len(peak_indices)
     if not is_monotonic_trend and significant_peaks >= 2:
+        episodes = [
+            f"с {watercut_series[k]:.1f}% до {watercut_series[k + 1]:.1f}% ({valid[k + 1].date})"
+            for k in peak_indices
+        ]
         reasons = [
-            f"Выявлено {significant_peaks} значимых (не менее чем в {peak_factor:.1f} раза "
-            "превышающих фон) повторяющихся локальных пика производной ВНФ при отсутствии "
-            "выраженного монотонного тренда — признак неравномерной, чередующейся "
-            "выработки нескольких пропластков многопластовой системы"
+            f"Выявлено {significant_peaks} эпизода(ов) резкого роста обводнённости за период "
+            f"без выраженного монотонного тренда: {'; '.join(episodes)} — признак "
+            "неравномерной, чередующейся выработки нескольких пропластков многопластовой системы"
         ]
         return DiagnosticResult(
             WaterMechanism.MULTILAYER, 0.7, reasons, wor_raw, wor_prime, notes,
@@ -299,19 +338,24 @@ def classify_water_mechanism(
         first_half_avg = sum(analysis[:half]) / half
         second_half_avg = sum(analysis[half:]) / (len(analysis) - half)
         if first_half_avg > 0 and second_half_avg < first_half_avg * 0.5:
+            mid = half
+            rate_first = _watercut_rate_per_month(watercut_series, days, 0, mid)
+            rate_second = _watercut_rate_per_month(watercut_series, days, mid, len(valid) - 1)
             reasons = [
-                "После начального роста производная ВНФ идёт на спад "
-                f"(среднее по первой половине периода {first_half_avg:.4f}, "
-                f"по второй {second_half_avg:.4f}) — форма кривой характерна "
-                "для конусообразования; РИР в этом случае не показан — конус "
-                "лечится сменой режима отбора, а не изоляцией интервала"
+                f"Темп роста обводнённости замедляется: в первой половине периода "
+                f"~{rate_first:+.2f} п.п./мес, во второй — ~{rate_second:+.2f} п.п./мес — "
+                "форма кривой характерна для конусообразования; РИР в этом случае не "
+                "показан — конус лечится сменой режима отбора, а не изоляцией интервала"
             ]
             return DiagnosticResult(
                 WaterMechanism.CONING, 0.65, reasons, wor_raw, wor_prime, notes,
                 productivity=productivity,
             )
 
-    reasons = ["Форма кривой ВНФ и её производной не выявляет выраженной аномалии обводнения"]
+    reasons = [
+        f"Обводнённость не показывает выраженного продолжительного роста или скачков "
+        f"за период наблюдения (от {watercut_series[0]:.1f}% до {watercut_series[-1]:.1f}%)"
+    ]
     return DiagnosticResult(
         WaterMechanism.STABLE, 0.5, reasons, wor_raw, wor_prime, notes,
         productivity=productivity,

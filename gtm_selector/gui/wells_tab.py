@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk, messagebox, filedialog
 
 from ..models import Well
-from ..data_io import load_field_database, load_wells_csv, save_wells_csv
+from ..data_io import load_field_database, load_wells_csv, parse_perforation_intervals, save_wells_csv
+from ..las_io import extract_petrophysics_at_intervals, match_las_to_well, parse_las
 from .well_dialog import WellDialog
 
 COLUMNS = [
@@ -40,6 +42,7 @@ class WellsTab(ttk.Frame):
         ttk.Button(toolbar, text="Импорт CSV...", command=self.import_csv).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Экспорт CSV...", command=self.export_csv).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Импорт базы (Excel)...", command=self.import_field_database).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Импорт ГИС (LAS)...", command=self.import_las_files).pack(side="left", padx=2)
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(toolbar, text="Загрузить пример", command=self.load_sample).pack(side="left", padx=2)
 
@@ -178,6 +181,68 @@ class WellsTab(ttk.Frame):
             messagebox.showwarning("Импорт базы завершён", summary)
         else:
             messagebox.showinfo("Импорт базы завершён", summary)
+
+    def import_las_files(self):
+        paths = filedialog.askopenfilenames(filetypes=[("LAS файлы", "*.las"), ("Все файлы", "*.*")])
+        if not paths:
+            return
+
+        curve_labels = {
+            "porosity": "пористость (PHIE)",
+            "water_saturation": "водонасыщенность (SW)",
+            "permeability": "проницаемость (Perm_core)",
+        }
+
+        matched = 0
+        unmatched: list[str] = []
+        no_valid_points: list[str] = []
+
+        for path in paths:
+            filename = Path(path).name
+            well = match_las_to_well(filename, self.wells)
+            if well is None:
+                unmatched.append(filename)
+                continue
+
+            try:
+                curves, rows = parse_las(path)
+            except Exception as exc:
+                unmatched.append(f"{filename} (ошибка чтения: {exc})")
+                continue
+
+            intervals = parse_perforation_intervals(well.perforation_interval)
+            petro = extract_petrophysics_at_intervals(curves, rows, intervals)
+
+            well.log_porosity = petro.get("porosity")
+            well.log_water_saturation = petro.get("water_saturation")
+            well.log_permeability = petro.get("permeability")
+            matched += 1
+
+            for key, label in curve_labels.items():
+                if petro.get(key) is None:
+                    no_valid_points.append(f"{well.name}: {label}")
+
+        self.app.mark_dirty()
+        self.refresh()
+
+        summary_lines = [f"Сопоставлено скважин: {matched}"]
+        if unmatched:
+            summary_lines.append("")
+            summary_lines.append("Не сопоставлено (не найдена скважина по номеру в имени файла):")
+            summary_lines.extend(f"• {name}" for name in unmatched)
+        if no_valid_points:
+            summary_lines.append("")
+            summary_lines.append(
+                "Нет валидных точек в интервале перфорации (ожидаемо при неполном "
+                "отборе керна/каротажа, это не ошибка):"
+            )
+            summary_lines.extend(f"• {line}" for line in no_valid_points)
+
+        text = "\n".join(summary_lines)
+        if unmatched or no_valid_points:
+            messagebox.showwarning("Импорт ГИС завершён", text)
+        else:
+            messagebox.showinfo("Импорт ГИС завершён", text)
 
     def export_csv(self):
         if not self.wells:
