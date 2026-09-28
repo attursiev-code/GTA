@@ -117,6 +117,52 @@ def _watercut_rate_per_month(watercut_series: list[float], days: list[int], i0: 
     return ((watercut_series[i1] - watercut_series[i0]) / dt * 30.4) if dt > 0 else 0.0
 
 
+def _detect_anomalous_indices(
+    watercut_series: list[float],
+    outlier_pp: float,
+    recovery_pp: float,
+) -> list[int]:
+    """Индексы аномальных месяцев на исходной (несглаженной) обводнённости.
+
+    Месяц i аномален, если обводнённость упала не менее чем на ``outlier_pp``
+    относительно предыдущего месяца, а в следующем месяце вернулась в
+    пределы ``recovery_pp`` от уровня до падения. Первый и последний месяцы
+    истории никогда не считаются аномальными (нет соседа с одной из сторон).
+    """
+    n = len(watercut_series)
+    anomalous = []
+    for i in range(1, n - 1):
+        drop = watercut_series[i - 1] - watercut_series[i]
+        if drop < outlier_pp:
+            continue
+        recovery_diff = abs(watercut_series[i + 1] - watercut_series[i - 1])
+        if recovery_diff <= recovery_pp:
+            anomalous.append(i)
+    return anomalous
+
+
+def _detect_sustained_step(watercut_series: list[float], step_pp: float) -> list[int]:
+    """Индексы устойчивых скачков уровня обводнённости (без сглаживания).
+
+    Скачок на переходе i-1 -> i засчитывается, если рост составляет не
+    менее ``step_pp`` и как минимум два последующих месяца держатся не ниже
+    середины между уровнем до и после скачка.
+    """
+    n = len(watercut_series)
+    steps = []
+    for i in range(1, n):
+        jump = watercut_series[i] - watercut_series[i - 1]
+        if jump < step_pp:
+            continue
+        subsequent = watercut_series[i + 1:]
+        if len(subsequent) < 2:
+            continue
+        midpoint = (watercut_series[i - 1] + watercut_series[i]) / 2.0
+        if all(v >= midpoint for v in subsequent):
+            steps.append(i)
+    return steps
+
+
 def _best_rise_near(watercut_series: list[float], k: int, window: int = 2) -> tuple[int | None, float]:
     """Ищет наибольший РЕАЛЬНЫЙ (несглаженный) рост обводнённости рядом со
     сглаженным индексом пика k (сглаживание может сдвигать пик на 1-2
@@ -170,11 +216,7 @@ def check_productivity_decline(
     decline_pct = ((initial_qo - current_qo) / initial_qo * 100.0) if initial_qo > 0 else 0.0
     significant = decline_pct >= decline_threshold_pct
 
-    note = (
-        f"Начальный дебит нефти составлял {initial_qo:.1f} т/сут, текущий — "
-        f"{current_qo:.1f} т/сут (падение на {decline_pct:.0f}%) — подтверждает, "
-        "что проблема обводнения существенно снизила продуктивность скважины"
-    )
+    note = f"Дебит нефти снизился с {initial_qo:.1f} до {current_qo:.1f} т/сут (на {decline_pct:.0f}%)"
 
     return {
         "initial_qo": initial_qo,
@@ -189,8 +231,16 @@ def classify_water_mechanism(
     history: list[ProductionPoint],
     min_points: int = 6,
     spike_ratio: float = 8.0,
+    watercut_outlier_pp: float = 30.0,
+    watercut_recovery_pp: float = 15.0,
+    watercut_step_pp: float = 20.0,
 ) -> DiagnosticResult:
     """Классифицирует механизм обводнения скважины по истории добычи.
+
+    Порядок обработки: (1) исключение аномальных месяцев на исходной
+    (несглаженной) обводнённости, (2) поиск устойчивого скачка уровня на
+    очищенном ряду без сглаживания, (3) при отсутствии скачка — существующая
+    логика на сглаженном ряде (пики/тренд).
 
     Внутренне строит ряд ВНФ = Qв/Qн (отношение воды к нефти — в отличие от
     процента обводнённости не насыщается при приближении к 100% и остаётся
@@ -221,9 +271,36 @@ def classify_water_mechanism(
             notes=notes,
         )
 
+    # --- 1. Аномальные месяцы (на исходной, несглаженной обводнённости). ---
+    raw_watercut = [_watercut_pct(p) for p in valid]
+    anomalous = _detect_anomalous_indices(raw_watercut, watercut_outlier_pp, watercut_recovery_pp)
+    for i in anomalous:
+        month_str = _parse_date(valid[i].date).strftime("%Y-%m")
+        notes.append(
+            f"Месяц {month_str}: обводнённость {raw_watercut[i]:.1f}% при соседних "
+            f"{raw_watercut[i - 1]:.1f}% и {raw_watercut[i + 1]:.1f}% — исключён как "
+            "аномальный (проверить замеры и события на скважине)"
+        )
+    if anomalous:
+        drop_set = set(anomalous)
+        valid = [p for idx, p in enumerate(valid) if idx not in drop_set]
+
+    if len(valid) < 2:
+        notes.append(
+            "Недостаточно точек после исключения аномальных месяцев для оценки "
+            "динамики обводнённости"
+        )
+        return DiagnosticResult(
+            mechanism=WaterMechanism.INSUFFICIENT_DATA,
+            confidence=0.0,
+            reasons=["Недостаточно точек истории добычи после исключения аномальных месяцев"],
+            notes=notes,
+        )
+
     # Дополнительный подтверждающий признак (не меняет диагноз механизма,
     # только усиливает/ослабляет уверенность в нём) — сравнение начальной и
-    # текущей продуктивности скважины по дебиту нефти.
+    # текущей продуктивности скважины по дебиту нефти. Считаем на очищенном
+    # (без аномальных месяцев) ряду для согласованности с остальной диагностикой.
     productivity = check_productivity_decline(valid)
 
     t0 = _parse_date(valid[0].date)
@@ -233,6 +310,28 @@ def classify_water_mechanism(
     # исходные (несглаженные) значения, а не производная ВНФ.
     watercut_series = [_watercut_pct(p) for p in valid]
 
+    # --- 2. Устойчивый скачок уровня — на очищенном ряду, БЕЗ сглаживания
+    #    (сглаживание размазывает ступеньку и гасит сигнал). ---
+    step_indices = _detect_sustained_step(watercut_series, watercut_step_pp)
+    if len(step_indices) == 1:
+        i = step_indices[0]
+        before, after = watercut_series[i - 1], watercut_series[i]
+        subsequent = watercut_series[i + 1:]
+        step_month = _parse_date(valid[i].date).strftime("%Y-%m")
+        reasons = [
+            f"Устойчивый скачок обводнённости с {before:.1f}% до {after:.1f}% "
+            f"({step_month}), после него {len(subsequent)} мес. на уровне не ниже "
+            f"{min(subsequent):.1f}%",
+            "Вывод предварительный: по дебитам нельзя отличить негерметичность "
+            "колонны от заколонного перетока, нужны температурный каротаж и "
+            "акустический цементомер",
+        ]
+        return DiagnosticResult(
+            WaterMechanism.NEAR_WELLBORE, 0.8, reasons, wor_raw, [], notes,
+            productivity=productivity,
+        )
+
+    # --- 3. В остальных случаях — существующая логика (пики/тренд), без изменений. ---
     wor_smoothed = _moving_average(wor_raw, window=_SMOOTHING_WINDOW)
 
     wor_prime = [0.0]
@@ -403,9 +502,12 @@ def classify_water_mechanism(
                 productivity=productivity,
             )
 
+    # Вердикт "Стабильна" — только когда исчерпаны все проверки выше (устойчивый
+    # скачок, тренд, пики, спад): не сравниваем здесь одни лишь первое и
+    # последнее значения периода, это уже сделано (и не подтвердилось) выше.
     reasons = [
-        f"Обводнённость не показывает выраженного продолжительного роста или скачков "
-        f"за период наблюдения (от {watercut_series[0]:.1f}% до {watercut_series[-1]:.1f}%)"
+        "Обводнённость не показывает ни устойчивого скачка, ни выраженного "
+        "продолжительного тренда роста за период наблюдения"
     ]
     return DiagnosticResult(
         WaterMechanism.STABLE, 0.5, reasons, wor_raw, wor_prime, notes,
