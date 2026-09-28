@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk, messagebox
 
-from ..models import Well, WellStatus
+from ..models import GRP_STATUS_LABELS, GRP_STATUS_LABELS_REVERSE, Well, WellStatus
+
+_GRP_DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y")
+
+
+def _parse_grp_date(text: str) -> str | None:
+    """Разбирает дату ГРП (ГГГГ-ММ-ДД или ДД.ММ.ГГГГ) в ГГГГ-ММ-ДД, либо None."""
+    for fmt in _GRP_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
 
 FIELD_SPECS = [
     ("id", "Номер скважины", "str"),
@@ -29,6 +43,8 @@ FIELD_SPECS = [
     ("last_active_qo", "Дебит нефти до остановки, т/сут", "float"),
     ("months_since_last_gtm", "Месяцев с последнего ГТМ", "int"),
     ("notes", "Примечание", "str"),
+    ("grp_status", "ГРП", "grp_status"),
+    ("grp_date", "Дата ГРП", "date_optional"),
 ]
 
 
@@ -65,6 +81,15 @@ class WellDialog(tk.Toplevel):
                     values=[WellStatus.ACTIVE.label, WellStatus.IDLE.label], width=22,
                 )
                 combo.grid(row=row, column=col + 1, sticky="w", padx=4, pady=3)
+            elif kind == "grp_status":
+                current = well.grp_status if well is not None else "unknown"
+                label_value = GRP_STATUS_LABELS.get(current, GRP_STATUS_LABELS["unknown"])
+                var = tk.StringVar(value=label_value)
+                combo = ttk.Combobox(
+                    container, textvariable=var, state="readonly",
+                    values=list(GRP_STATUS_LABELS.values()), width=22,
+                )
+                combo.grid(row=row, column=col + 1, sticky="w", padx=4, pady=3)
             else:
                 value = getattr(well, attr) if well is not None else default
                 var = tk.StringVar(value=str(value))
@@ -94,6 +119,23 @@ class WellDialog(tk.Toplevel):
                     data[attr] = int(float(raw)) if raw.strip() != "" else 0
                 elif kind == "status":
                     data[attr] = WellStatus.ACTIVE if raw == WellStatus.ACTIVE.label else WellStatus.IDLE
+                elif kind == "grp_status":
+                    data[attr] = GRP_STATUS_LABELS_REVERSE.get(raw, "unknown")
+                elif kind == "date_optional":
+                    text = raw.strip()
+                    if text == "":
+                        data[attr] = ""
+                    else:
+                        parsed = _parse_grp_date(text)
+                        if parsed is None:
+                            messagebox.showerror(
+                                "Ошибка ввода",
+                                f"Не удалось разобрать «{label}»: {raw!r}. "
+                                "Используйте формат ГГГГ-ММ-ДД или ДД.ММ.ГГГГ.",
+                                parent=self,
+                            )
+                            return
+                        data[attr] = parsed
                 else:
                     data[attr] = raw
         except ValueError as exc:
@@ -103,6 +145,11 @@ class WellDialog(tk.Toplevel):
         if not data.get("id", "").strip():
             messagebox.showerror("Ошибка ввода", "Номер скважины обязателен.", parent=self)
             return
+
+        # ГРП не "Проводился", а дата всё же заполнена — не блокируем сохранение,
+        # просто не сохраняем дату (не относится к делу).
+        if data.get("grp_status") != "yes":
+            data["grp_date"] = ""
 
         self.result = Well.from_dict(data)
         self.destroy()

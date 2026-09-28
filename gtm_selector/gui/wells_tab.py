@@ -6,7 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog
 
-from ..models import Well
+from ..models import GRP_STATUS_LABELS, Well, format_date_ddmmyyyy, watercut_level
 from ..data_io import load_field_database, load_wells_csv, parse_perforation_intervals, save_wells_csv
 from ..las_io import extract_petrophysics_at_intervals, match_las_to_well, parse_las
 from .well_dialog import WellDialog
@@ -18,11 +18,13 @@ COLUMNS = [
     ("status_label", "Статус", 110),
     ("qo", "Qн, т/сут", 80),
     ("ql", "Qж, т/сут", 80),
-    ("watercut", "Обв., %", 70),
+    ("watercut", "Обв., %", 130),
     ("skin", "Скин", 60),
     ("perm", "k, мД", 60),
     ("reserves_remaining", "Запасы, тыс.т", 90),
     ("depletion", "Выраб., %", 80),
+    ("grp_status", "ГРП", 110),
+    ("grp_date", "Дата ГРП", 90),
 ]
 
 
@@ -68,12 +70,17 @@ class WellsTab(ttk.Frame):
 
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
+        thresholds = self.app.settings.thresholds
         for well in self.wells:
+            watercut_text = f"{well.watercut:.1f} ({watercut_level(well.watercut, thresholds)})"
+            grp_text = "—" if well.grp_status == "unknown" else GRP_STATUS_LABELS.get(well.grp_status, "—")
+            grp_date_text = format_date_ddmmyyyy(well.grp_date) or "—"
             self.tree.insert("", "end", iid=well.id, values=(
                 well.id, well.name, well.formation, well.status.label,
-                f"{well.qo:.1f}", f"{well.ql:.1f}", f"{well.watercut:.1f}",
+                f"{well.qo:.1f}", f"{well.ql:.1f}", watercut_text,
                 f"{well.skin:.1f}", f"{well.perm:.1f}",
                 f"{well.reserves_remaining:.1f}", f"{well.depletion:.1f}",
+                grp_text, grp_date_text,
             ))
         self.count_label.config(text=f"Скважин: {len(self.wells)}")
 

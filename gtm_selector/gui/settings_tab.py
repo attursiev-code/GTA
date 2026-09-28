@@ -36,6 +36,8 @@ THRESHOLD_FIELDS = [
     ("reactivation_reserves_min", "Реактивация: минимальные остаточные запасы, тыс.т"),
     ("reactivation_decline_per_100days", "Реактивация: потеря потенциала на 100 сут простоя, %"),
     ("min_months_between_gtm", "Минимум месяцев между ГТМ на одной скважине"),
+    ("watercut_low_max", "Обводнённость: верхняя граница низкой, %"),
+    ("watercut_mid_max", "Обводнённость: верхняя граница средней, %"),
 ]
 
 ECON_FIELDS = [
@@ -150,6 +152,7 @@ class SettingsTab(ttk.Frame):
         new_econ.cost_by_type = cost_by_type
         self.app.settings = Settings(thresholds=new_thresholds, economics=new_econ)
         self.app.mark_dirty()
+        self.app.wells_tab.refresh()  # пересчитать уровни обводнённости в таблице
         messagebox.showinfo("Параметры", "Параметры применены.")
 
     def reset_defaults(self):
@@ -158,3 +161,4 @@ class SettingsTab(ttk.Frame):
         self.app.settings = Settings()
         self.load_from_settings()
         self.app.mark_dirty()
+        self.app.wells_tab.refresh()
