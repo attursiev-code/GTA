@@ -3,7 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from enum import Enum
+
+from .params import Thresholds
+
+GRP_STATUS_LABELS = {
+    "unknown": "Нет данных",
+    "no": "Не проводился",
+    "yes": "Проводился",
+}
+GRP_STATUS_LABELS_REVERSE = {v: k for k, v in GRP_STATUS_LABELS.items()}
 
 
 class WellStatus(str, Enum):
@@ -104,6 +114,10 @@ class Well:
     log_water_saturation: float | None = None   # начальная водонасыщенность, %
     log_permeability: float | None = None        # проницаемость по керну, мД
 
+    # Признак ГРП (ручной ввод, см. well_dialog.py)
+    grp_status: str = "unknown"  # "unknown" | "no" | "yes"
+    grp_date: str = ""           # дата ГРП, ГГГГ-ММ-ДД; пусто, если не проводился/неизвестно
+
     def __post_init__(self):
         self.status = WellStatus.from_any(self.status)
 
@@ -144,6 +158,33 @@ class Well:
         allowed = {f for f in cls.__dataclass_fields__}
         data = {k: v for k, v in data.items() if k in allowed}
         return cls(**data)
+
+
+def watercut_level(value: float, thresholds: Thresholds) -> str:
+    """Качественный уровень обводнённости по условным границам из Thresholds.
+
+    Границы (``watercut_low_max``/``watercut_mid_max``) заданы пользователем
+    в настройках — единого стандартного значения в источниках нет.
+    """
+    if value <= thresholds.watercut_low_max:
+        return "низкая"
+    if value <= thresholds.watercut_mid_max:
+        return "средняя"
+    return "высокая"
+
+
+def format_date_ddmmyyyy(iso_date: str) -> str:
+    """Преобразует дату из ГГГГ-ММ-ДД в ДД.ММ.ГГГГ для отображения.
+
+    Возвращает пустую строку, если ``iso_date`` пуст; если формат неожиданный —
+    возвращает исходную строку как есть, не ломая отображение.
+    """
+    if not iso_date:
+        return ""
+    try:
+        return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return iso_date
 
 
 @dataclass
