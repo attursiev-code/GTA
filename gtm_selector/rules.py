@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from .diagnostics import WaterMechanism, classify_water_mechanism
-from .models import Well, WellStatus, GtmType, Candidate
+from .models import Well, WellStatus, GtmType, Candidate, watercut_level
 from .params import Thresholds
 
 
@@ -83,8 +83,20 @@ def check_rir(well: Well, t: Thresholds) -> Candidate:
 
     if well.status != WellStatus.ACTIVE:
         return no_diagnosis
+
     if well.watercut < t.rir_watercut_min:
-        return no_diagnosis
+        # Не прошла предварительный фильтр по обводнённости — не молчим,
+        # а явно показываем скважину как рассмотренную, но не оценивавшуюся.
+        level = watercut_level(well.watercut, t)
+        reasons = [
+            f"Обводнённость {well.watercut:.1f}% (уровень: {level}) ниже порога "
+            f"{t.rir_watercut_min:.1f}% для рассмотрения РИР"
+        ]
+        return Candidate(
+            GtmType.RIR_SQUEEZE, False, reasons, 0.0,
+            mechanism="Не оценивался (обводнённость ниже порога)",
+        )
+
     if well.depletion > t.rir_depletion_max:
         return no_diagnosis
 
@@ -92,11 +104,16 @@ def check_rir(well: Well, t: Thresholds) -> Candidate:
         well.history,
         min_points=t.rir_min_history_points,
         spike_ratio=t.rir_spike_ratio,
+        watercut_outlier_pp=t.rir_watercut_outlier_pp,
+        watercut_recovery_pp=t.rir_watercut_recovery_pp,
+        watercut_step_pp=t.rir_watercut_step_pp,
     )
     mechanism_label = _MECHANISM_LABELS.get(diag.mechanism, diag.mechanism.value)
 
+    level = watercut_level(well.watercut, t)
     threshold_reasons = [
-        f"Обводнённость {well.watercut:.1f}% ≥ {t.rir_watercut_min:.1f}% — прорыв воды",
+        f"Обводнённость {well.watercut:.1f}% (уровень: {level}) — выше порога "
+        f"{t.rir_watercut_min:.1f}% для рассмотрения РИР",
     ]
     reasons = [*threshold_reasons, *diag.reasons]
     # Подтверждающий признак (не отдельный диагноз): значимое падение
