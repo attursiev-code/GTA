@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox, filedialog
 
 from ..models import GRP_STATUS_LABELS, Well, format_date_ddmmyyyy, watercut_level
 from ..data_io import load_field_database, load_wells_csv, parse_perforation_intervals, save_wells_csv
+from ..gdis_io import load_gdis_database
 from ..las_io import extract_petrophysics_at_intervals, match_las_to_well, parse_las
 from .well_dialog import WellDialog
 
@@ -45,6 +46,7 @@ class WellsTab(ttk.Frame):
         ttk.Button(toolbar, text="Экспорт CSV...", command=self.export_csv).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Импорт базы (Excel)...", command=self.import_field_database).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Импорт ГИС (LAS)...", command=self.import_las_files).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Импорт ГДИС (Excel)...", command=self.import_gdis_files).pack(side="left", padx=2)
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(toolbar, text="Загрузить пример", command=self.load_sample).pack(side="left", padx=2)
 
@@ -250,6 +252,35 @@ class WellsTab(ttk.Frame):
             messagebox.showwarning("Импорт ГИС завершён", text)
         else:
             messagebox.showinfo("Импорт ГИС завершён", text)
+
+    def import_gdis_files(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel файлы", "*.xlsx"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        try:
+            records_by_well, warnings = load_gdis_database(path, self.wells)
+        except Exception as exc:
+            messagebox.showerror("Ошибка импорта ГДИС", str(exc))
+            return
+
+        by_id = {w.id: w for w in self.wells}
+        total_records = 0
+        for well_id, records in records_by_well.items():
+            well = by_id.get(well_id)
+            if well is None:
+                continue
+            well.gdis_records.extend(records)
+            total_records += len(records)
+
+        self.app.mark_dirty()
+        self.refresh()
+
+        summary = f"Загружено записей ГДИС: {total_records}"
+        if warnings:
+            summary += "\n\nПредупреждения:\n" + "\n".join(f"• {w}" for w in warnings)
+            messagebox.showwarning("Импорт ГДИС завершён", summary)
+        else:
+            messagebox.showinfo("Импорт ГДИС завершён", summary)
 
     def export_csv(self):
         if not self.wells:

@@ -75,6 +75,29 @@ class ProductionPoint:
 
 
 @dataclass
+class GdisRecord:
+    """Запись гидродинамического исследования скважины (ГДИС) из Excel-базы.
+
+    Формат файла ГДИС может отличаться от базы к базе (разные месторождения/
+    выгрузки) — импорт (см. gdis_io.py) ищет колонки по ключевым словам, а не
+    по точному названию, и любое поле, для которого в файле не нашлось
+    подходящей колонки, остаётся пустым/None — это нормальная ситуация, а не
+    ошибка импорта.
+    """
+
+    well_id: str
+    object_name: str = ""
+    horizon: str = ""
+    interval: str = ""
+    date: str = ""              # ГГГГ-ММ-ДД; пусто, если распознать не удалось
+    research_type: str = ""
+    skin: float | None = None
+    permeability: float | None = None
+    quality: str = ""
+    comment: str = ""
+
+
+@dataclass
 class Well:
     """Данные по скважине, необходимые для подбора ГТМ."""
 
@@ -118,6 +141,10 @@ class Well:
     grp_status: str = "unknown"  # "unknown" | "no" | "yes"
     grp_date: str = ""           # дата ГРП, ГГГГ-ММ-ДД; пусто, если не проводился/неизвестно
 
+    # Записи ГДИС (гидродинамические исследования), импорт из Excel-базы
+    # (см. gdis_io.py) — формат листа может отличаться от базы к базе.
+    gdis_records: list[GdisRecord] = field(default_factory=list)
+
     def __post_init__(self):
         self.status = WellStatus.from_any(self.status)
 
@@ -155,6 +182,12 @@ class Well:
                 p if isinstance(p, ProductionPoint) else ProductionPoint(**p)
                 for p in history
             ]
+        gdis_records = data.get("gdis_records")
+        if gdis_records:
+            data["gdis_records"] = [
+                r if isinstance(r, GdisRecord) else GdisRecord(**r)
+                for r in gdis_records
+            ]
         allowed = {f for f in cls.__dataclass_fields__}
         data = {k: v for k, v in data.items() if k in allowed}
         return cls(**data)
@@ -171,6 +204,22 @@ def watercut_level(value: float, thresholds: Thresholds) -> str:
     if value <= thresholds.watercut_mid_max:
         return "средняя"
     return "высокая"
+
+
+def gdis_matches_well_object(record: GdisRecord, well: Well) -> bool:
+    """Проверяет, относится ли запись ГДИС к текущему объекту/горизонту скважины.
+
+    Сравнение без учёта регистра/пробелов. Если объект/горизонт в записи не
+    заполнены (в файле ГДИС не было такой колонки) — проверить нечем, запись
+    считается относящейся к текущему объекту (не блокируем её).
+    """
+    object_filled = bool(record.object_name.strip())
+    horizon_filled = bool(record.horizon.strip())
+    if object_filled and record.object_name.strip().lower() != well.formation.strip().lower():
+        return False
+    if horizon_filled and record.horizon.strip().lower() != well.horizon.strip().lower():
+        return False
+    return True
 
 
 def format_date_ddmmyyyy(iso_date: str) -> str:

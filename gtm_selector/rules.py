@@ -9,8 +9,52 @@
 from __future__ import annotations
 
 from .diagnostics import WaterMechanism, classify_water_mechanism
-from .models import Well, WellStatus, GtmType, Candidate, watercut_level
+from .models import GdisRecord, Well, WellStatus, GtmType, Candidate, gdis_matches_well_object, watercut_level
 from .params import Thresholds
+
+_GDIS_BAD_QUALITY = {"недостоверное", "неуспешное", "низкая"}
+
+
+def _gdis_quality_ok(record: GdisRecord) -> bool:
+    quality = record.quality.strip().lower()
+    return quality == "" or quality not in _GDIS_BAD_QUALITY
+
+
+def _gdis_permeability_contrast(records: list[GdisRecord]) -> str | None:
+    """Сравнивает проницаемость по ГДИС между интервалами (не более одной
+    записи на сравнение, если её проницаемость отсутствует или отфильтрована
+    по качеству — такая запись сюда уже не попадает, см. вызывающий код)."""
+    candidates = [r for r in records if r.permeability is not None and r.interval.strip()]
+    intervals = {r.interval.strip() for r in candidates}
+    if len(intervals) < 2:
+        return None
+    perms = [r.permeability for r in candidates]
+    perm_max, perm_min = max(perms), min(perms)
+    if perm_min <= 0:
+        return None
+    ratio = perm_max / perm_min
+    if ratio < 2.0:
+        return None
+    return (
+        f"По данным ГДИС проницаемость перфорированных интервалов отличается "
+        f"в {ratio:.1f} раз ({perm_max:.1f} мД и {perm_min:.1f} мД) - подтверждает "
+        "вероятную неоднородность пропластков"
+    )
+
+
+def _gdis_skin_lines(records: list[GdisRecord]) -> list[str]:
+    lines = []
+    for r in records:
+        if r.skin is None:
+            continue
+        date_text = r.date or "дата неизвестна"
+        interval_text = r.interval or "не указан"
+        perm_text = f"{r.permeability:.1f}" if r.permeability is not None else "нет данных"
+        lines.append(
+            f"ГДИС ({date_text}, интервал {interval_text}): скин {r.skin:.1f}, "
+            f"проницаемость {perm_text} мД"
+        )
+    return lines
 
 
 def _scaled_uplift(qo: float, base_pct: float, factor: float) -> float:
@@ -133,6 +177,23 @@ def check_rir(well: Well, t: Thresholds) -> Candidate:
     if well.log_permeability is not None:
         reasons.append(
             f"Проницаемость по керну в интервале перфорации: {well.log_permeability:.1f} мД"
+        )
+
+    # Контекст по ГДИС (не влияет на диагноз механизма, только поясняет его) —
+    # только записи, относящиеся к текущему объекту/горизонту скважины и не
+    # помеченные как недостоверные/неуспешные/низкого качества.
+    filtered_gdis = [
+        r for r in well.gdis_records
+        if gdis_matches_well_object(r, well) and _gdis_quality_ok(r)
+    ]
+    contrast_line = _gdis_permeability_contrast(filtered_gdis)
+    if contrast_line:
+        reasons.append(contrast_line)
+    reasons.extend(_gdis_skin_lines(filtered_gdis))
+    if any(not gdis_matches_well_object(r, well) for r in well.gdis_records):
+        reasons.append(
+            "Есть данные ГДИС по другому объекту/горизонту скважины - требуется "
+            "уточнение, относится ли это к истории перевода на текущий интервал"
         )
 
     mapping = _RIR_MECHANISM_MAP.get(diag.mechanism)
