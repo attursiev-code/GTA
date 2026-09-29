@@ -132,6 +132,21 @@ def _cell_to_date_str(value) -> str | None:
     return text or None
 
 
+def normalize_header(value) -> str:
+    """Нормализует заголовок колонки для гибкого поиска синонимов: нижний
+    регистр, без запятых, схлопнутые (и обрезанные по краям) пробелы.
+
+    Используется при импорте файлов, чей формат может отличаться от раза к
+    разу (месторождение/выгрузка) — колонки ищутся по ключевым словам-
+    синонимам, содержащимся в заголовке, а не по точному названию
+    (см. gdis_io.py).
+    """
+    if value is None:
+        return ""
+    text = str(value).strip().lower().replace(",", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _header_index(header_row) -> dict[str, int]:
     return {str(cell).strip(): idx for idx, cell in enumerate(header_row) if cell is not None}
 
