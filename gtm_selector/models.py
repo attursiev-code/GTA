@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
@@ -206,19 +207,45 @@ def watercut_level(value: float, thresholds: Thresholds) -> str:
     return "высокая"
 
 
+_HORIZON_SPLIT_RE = re.compile(r"[+,/;\s]+")
+
+
+def split_horizon_tokens(text: str) -> set[str]:
+    """Разбивает строку горизонта/объекта на отдельные элементы для сравнения.
+
+    Разделители: ``+``, ``,``, ``/``, ``;`` и пробел. Дефис и точка НЕ
+    являются разделителями — дефис часть самого обозначения горизонта
+    (например, ``T2-II``), а не разделитель между несколькими горизонтами.
+    Приводит к нижнему регистру, отбрасывает пустые элементы.
+
+    Пример: ``'T2-II+T2-III'`` -> ``{'t2-ii', 't2-iii'}``.
+    """
+    if not text:
+        return set()
+    tokens = _HORIZON_SPLIT_RE.split(text.strip().lower())
+    return {t for t in tokens if t}
+
+
 def gdis_matches_well_object(record: GdisRecord, well: Well) -> bool:
     """Проверяет, относится ли запись ГДИС к текущему объекту/горизонту скважины.
 
-    Сравнение без учёта регистра/пробелов. Если объект/горизонт в записи не
-    заполнены (в файле ГДИС не было такой колонки) — проверить нечем, запись
-    считается относящейся к текущему объекту (не блокируем её).
+    Сравнение — по пересечению множеств токенов (``split_horizon_tokens``),
+    а не по полному совпадению строк: составной горизонт/объект скважины
+    (например, ``'T2-II+T2-III'``) должен считаться совпадающим с записью
+    ГДИС по одному из горизонтов (``'T2-II'``), а не требовать точного
+    совпадения всей строки. Если один из двух текстов (запись или текущий
+    объект/горизонт скважины) пуст — сравнить нечем, не блокируем запись.
     """
-    object_filled = bool(record.object_name.strip())
-    horizon_filled = bool(record.horizon.strip())
-    if object_filled and record.object_name.strip().lower() != well.formation.strip().lower():
-        return False
-    if horizon_filled and record.horizon.strip().lower() != well.horizon.strip().lower():
-        return False
+    if record.object_name.strip():
+        record_tokens = split_horizon_tokens(record.object_name)
+        well_tokens = split_horizon_tokens(well.formation)
+        if well_tokens and not (record_tokens & well_tokens):
+            return False
+    if record.horizon.strip():
+        record_tokens = split_horizon_tokens(record.horizon)
+        well_tokens = split_horizon_tokens(well.horizon)
+        if well_tokens and not (record_tokens & well_tokens):
+            return False
     return True
 
 
